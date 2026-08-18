@@ -12,7 +12,8 @@ Flow (per clip):
     5. mix the TTS over the background AT the detected start offset
     6. mux the new audio back onto the original video (video copied, audio replaced)
 
-demucs/torch/faster-whisper are lazy-imported (heavy) so importing this module stays cheap.
+demucs/torch are lazy-imported (heavy) so importing this module stays cheap; speech timing uses
+the ~2 MB Silero VAD bundled in faster-whisper — the whisper model itself is never loaded.
 ffmpeg via subprocess, same as the rest of the app.
 """
 from __future__ import annotations
@@ -32,7 +33,15 @@ FFMPEG = "ffmpeg"
 
 # Cached across calls so repeated /revoice requests in the same process don't reload the model
 # (a few seconds each) — same lazy-singleton shape as other credential/client caches in this app.
-_whisper_model = None
+def _speech_segments(wav: Path) -> list[tuple[float, float]]:
+    """Speech (start, end) spans in seconds via Silero VAD — the ~2 MB model bundled inside
+    faster-whisper (no download, tiny RAM). We only ever needed timestamps, never the text,
+    so the 500 MB whisper model is never loaded."""
+    from faster_whisper.audio import decode_audio
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+    audio = decode_audio(str(wav), sampling_rate=16000)
+    ts = get_speech_timestamps(audio, VadOptions(), sampling_rate=16000)
+    return [(t["start"] / 16000.0, t["end"] / 16000.0) for t in ts]
 
 # Trim ONLY leading + trailing silence (Gemini TTS pads both ends) — keep mid-sentence pauses.
 _SILENCE_TRIM = (
@@ -94,28 +103,19 @@ def _demucs_separate(audio: Path, work: Path) -> tuple[Path, Path]:
 
 
 def _detect_speech_span(vocals: Path, clip_sec: float) -> tuple[float, float]:
-    """Find the WINDOW where Veo's own (invented) voice is speaking in `vocals` — via STT, but
-    ONLY for the timestamps (first segment start → last segment end). The recognized TEXT is
-    thrown away: the real words come from voice_over, not from whatever Veo happened to say.
+    """Find the WINDOW where Veo's own (invented) voice is speaking in `vocals` — Silero VAD
+    timestamps (first segment start → last segment end). What was said doesn't matter: the real
+    words come from voice_over, not from whatever Veo happened to say.
     The new voice is then fitted into exactly this window so it lands while the mouth moves.
     Returns (0.0, clip_sec) — the whole clip, = old behavior — if detection fails or finds no
     speech, so a shaky detection never breaks the mix."""
-    global _whisper_model
     try:
-        with obs.span("revoice.whisper_speech_span", metadata={"clip_sec": round(clip_sec, 2)}) as sp:
-            if _whisper_model is None:
-                from faster_whisper import WhisperModel
-                # ponytail: "small"/cpu/int8 — bump to a bigger model if timing is consistently off
-                _whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
-            segments, _info = _whisper_model.transcribe(str(vocals), vad_filter=True)
-            start, end = None, None
-            for seg in segments:      # must drain the generator to reach the LAST segment's end
-                if start is None:
-                    start = float(seg.start)
-                end = float(seg.end)
-            if start is None or end is None:
+        with obs.span("revoice.silero_speech_span", metadata={"clip_sec": round(clip_sec, 2)}) as sp:
+            segs = _speech_segments(vocals)
+            if not segs:
                 sp.update(output={"speech": False})
                 return 0.0, clip_sec
+            start, end = segs[0][0], segs[-1][1]
             start = max(0.0, min(start, clip_sec - 0.15))
             end = min(clip_sec, max(end, start + 0.15))   # span at least 0.15s, within the clip
             sp.update(output={"start": round(start, 2), "end": round(end, 2)})
@@ -126,7 +126,7 @@ def _detect_speech_span(vocals: Path, clip_sec: float) -> tuple[float, float]:
 
 
 def _merge_close(segs: list[tuple[float, float]], gap: float = 0.4) -> list[list[float]]:
-    """Merge speech segments separated by less than `gap` (whisper over-splits within one utterance)."""
+    """Merge speech segments separated by less than `gap` (VAD over-splits within one utterance)."""
     if not segs:
         return []
     out = [list(segs[0])]
@@ -140,7 +140,7 @@ def _merge_close(segs: list[tuple[float, float]], gap: float = 0.4) -> list[list
 
 def _detect_speech_segments(vocals: Path, clip_sec: float, n: int) -> list[tuple[float, float]]:
     """Return exactly `n` speech windows (in order) — one per shot's voice_over — from Veo's own
-    voice track. whisper VAD → merge close blocks → reconcile to n: len==n use as-is; len>n merge
+    voice track. Silero VAD → merge close blocks → reconcile to n: len==n use as-is; len>n merge
     the closest-adjacent blocks until n remain (keeps the n-1 biggest gaps = shot boundaries);
     len<n (speech ran together) or any failure → n EVEN windows across the clip (safe fallback)."""
     def _even() -> list[tuple[float, float]]:
@@ -149,13 +149,8 @@ def _detect_speech_segments(vocals: Path, clip_sec: float, n: int) -> list[tuple
 
     if n <= 1:
         return [_detect_speech_span(vocals, clip_sec)]
-    global _whisper_model
     try:
-        if _whisper_model is None:
-            from faster_whisper import WhisperModel
-            _whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
-        segments, _info = _whisper_model.transcribe(str(vocals), vad_filter=True)
-        blocks = _merge_close(sorted((float(s.start), float(s.end)) for s in segments))
+        blocks = _merge_close(sorted(_speech_segments(vocals)))
         if not blocks or len(blocks) < n:
             return _even()
         while len(blocks) > n:      # merge the two adjacent blocks with the smallest gap between them
@@ -386,7 +381,7 @@ def add_narration_multi(video: Path, voice_overs: list[str], *, voice: str | Non
 
 def detect_speech_window(video: Path) -> tuple[float, float] | None:
     """Best-effort: find [start, end] where speech ACTUALLY occurs in `video`'s own audio track,
-    via whisper VAD (no demucs — for use AFTER revoicing, when the spoken voice IS the TTS/Veo
+    via Silero VAD (no demucs — for use AFTER revoicing, when the spoken voice IS the TTS/Veo
     line, not mixed with a separate invented voice). Returns None on any failure/no-speech, so a
     caller (e.g. subtitle timing) can fall back to its own default span."""
     try:

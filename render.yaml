@@ -5,7 +5,9 @@ services:
     name: video-factory-backend
     runtime: docker
     region: singapore
-    plan: standard # ffmpeg + faster-whisper (~500 MB model in RAM) — free/starter's 512 MB OOMs
+    # free = 512 MB RAM. Speech timing uses Silero VAD (~2 MB) — whisper is never loaded.
+    # If revoice/dubbing comes back, bump to standard: demucs (torch) OOMs 512 MB.
+    plan: free
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL

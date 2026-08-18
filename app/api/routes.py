@@ -2940,7 +2940,7 @@ async def revoice(request: RevoiceRequest, http_request: Request) -> dict:
 
 @router.post("/steps/video/subtitle")
 async def step_video_subtitle(request: SubtitleRequest, http_request: Request) -> dict:
-    """Burn ONE clip's caption, timed to the window where speech actually happens (whisper VAD, or the
+    """Burn ONE clip's caption, timed to the window where speech actually happens (Silero VAD, or the
     exact start/end from /revoice spans) — so it appears on speech-onset and clears when the line ends.
     Overwrites the clip in place (same URL; UI cache-busts with ?t=), mirroring /revoice."""
     from app.services.revoice import detect_speech_window
@@ -2964,10 +2964,13 @@ async def step_video_subtitle(request: SubtitleRequest, http_request: Request) -
         clip_sec = await _probe_duration(clip)
         if request.start is not None and request.end is not None and request.end > request.start:
             start, end, source = max(0.0, request.start), min(clip_sec, request.end), "revoice"
-        else:
+        elif cfg.subtitle_sync_to_speech:
             win = await asyncio.to_thread(detect_speech_window, clip)
             start, end = win if win else (0.0, clip_sec)
             source = "detect" if win else "whole_clip"
+        else:
+            # speech-sync disabled (subtitle_sync_to_speech=False) — caption spans the whole clip
+            start, end, source = 0.0, clip_sec, "whole_clip"
         ass = Path(tempfile.mkdtemp()) / "subs.ass"   # no-space path → clean filter syntax
         if not _write_ass([(start, end)], [text], ass, cfg):
             raise HTTPException(status_code=400, detail="สร้างไฟล์ซับไม่สำเร็จ")
@@ -5155,7 +5158,7 @@ def _clip_spans(durations: list[float], transitions: list[str], cfg) -> list[tup
 
 async def _speech_timed_spans(paths: list[Path], spans: list[tuple[float, float]], captions: list[str]) -> list[tuple[float, float]]:
     """Narrow each clip's subtitle span to the window where speech ACTUALLY occurs in that clip
-    (whisper VAD via revoice.detect_speech_window), so captions don't sit on-screen through silent
+    (Silero VAD via revoice.detect_speech_window), so captions don't sit on-screen through silent
     lead-in/lead-out. Best-effort per clip — a clip with no caption, or where detection fails/finds
     nothing, keeps its original full-clip span (never worse than before this ran)."""
     from app.services.revoice import detect_speech_window

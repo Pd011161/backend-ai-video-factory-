@@ -22,8 +22,8 @@ WORKDIR /app
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    # faster-whisper downloads the "small" model on first revoice/subtitle call (~500 MB). Point
-    # the HF cache at a path compose mounts a volume on, or every container restart re-downloads it.
+    # Speech timing uses the Silero VAD bundled inside the faster-whisper package (~2 MB, no
+    # download). HF_HOME kept for anything that does hit the HF hub (e.g. demucs deps on revoice).
     HF_HOME=/app/.cache/huggingface
 
 # Dependencies in their own layer so they rebuild only when the lock changes.

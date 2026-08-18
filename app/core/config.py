@@ -313,8 +313,9 @@ class VideoGenConfig(BaseModel):
     subtitles_in_video: bool = False     # burn each clip's on_screen_text into final.mp4 as soft subtitles
     subtitle_font: str = "assets/fonts/NotoSansThai-Regular.ttf"  # bundled Thai font (family auto-detected)
     subtitle_font_size: int = 56         # POC parity — large, readable over video
-    # Narrow each clip's subtitle span to where speech ACTUALLY occurs (whisper VAD) instead of the
-    # clip's full on-screen duration — so a caption appears on speech-onset and clears when the line ends.
+    # Narrow each clip's subtitle span to where speech ACTUALLY occurs (Silero VAD, ~2 MB model
+    # bundled in faster-whisper — cheap enough for Render free tier) instead of the clip's full
+    # on-screen duration — so a caption appears on speech-onset and clears when the line ends.
     subtitle_sync_to_speech: bool = True
     ffmpeg_bin: str = "ffmpeg"           # ffmpeg binary; resolver falls back to a libass build if this lacks it
 
