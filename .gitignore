@@ -1,0 +1,49 @@
+# --- secrets ---
+# NOT `*.json`: that also swallowed package.json / tsconfig.json / package-lock.json, so a fresh
+# clone could not build the frontend at all. Service-account keys live under credentials/ and are
+# covered by the rule below; runtime JSON (prompt_overrides.json) sits under outputs/.
+*.env
+*.env.local
+credentials/
+
+# --- backend (python) ---
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- backend (sqlite) ---
+*.db
+*.db.bak*
+*.db-shm
+*.db-wal
+
+
+# --- generated output ---
+tmp/
+outputs/
+scripts/output/
+test/
+autopipeline/
+
+# --- os ---
+.DS_Store
+Thumbs.db
+
+# --- local-only notes / scratch ---
+CLAUDE.md
+plan_generate_image.md
+scripts/csv2md.ipynb
+pipeline
+research_and_POC
+
+# --- testing ---
+*/test/output
+# --- local AI-tool skill installs (per-machine, not part of the app) ---
+.agents/
+.claude/
+skills-lock.json

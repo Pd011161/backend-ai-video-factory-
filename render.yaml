@@ -1,0 +1,44 @@
+# Render Blueprint — deploy with "New → Blueprint" pointing at this repo.
+# Every sync:false var is prompted for in the dashboard on first deploy.
+services:
+  - type: web
+    name: video-factory-backend
+    runtime: docker
+    region: singapore
+    plan: standard # ffmpeg + faster-whisper (~500 MB model in RAM) — free/starter's 512 MB OOMs
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: video-factory-db
+          property: connectionString
+      # Paste the FULL contents of credentials/credentials.json (Vertex service account).
+      # app/main.py writes it to that path at startup — the file itself is never committed.
+      - key: GEMINI_CREDENTIALS_JSON
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      # All five required for S3 mode; leave any unset and media falls back to ephemeral local disk.
+      - key: AWS_ACCESS_KEY
+        sync: false
+      - key: AWS_SECRET_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_BUCKET
+        sync: false
+      - key: AWS_URL
+        sync: false
+
+databases:
+  - name: video-factory-db
+    region: singapore
+    plan: basic-256mb

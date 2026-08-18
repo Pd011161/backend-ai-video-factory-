@@ -1,0 +1,30 @@
+# Everything here either doesn't belong in an image, or is mounted at runtime by compose.
+
+# Secrets — mounted, never baked in
+.env
+.env.local
+credentials/
+
+# Runtime data — volumes
+outputs/
+tmp/
+*.db
+*.db.bak*
+*.db-shm
+*.db-wal
+.cache/
+
+# Local env / caches
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Docs and local-only notes — not needed to run. The character/scene reference images come from
+# the config_refs table (uploaded via /api/refs/{kind}), not from files in here.
+README.md
+docs/

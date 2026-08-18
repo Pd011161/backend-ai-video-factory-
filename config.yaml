@@ -1,0 +1,179 @@
+# Ported from v1's config.yaml (ai-video-factory/config.yaml) for pipeline/quality parity.
+# v2 has no equivalent file until now — it was silently running on the small code defaults in
+# app/core/config.py, which is what caused the Gemini relevance-filter response to get truncated
+# (filter.max_output_tokens=1024 was too small) and fail closed on Research. Drive-sync config
+# (research_drive) is dropped — v2 has no Drive dependency.
+
+# Database connection minus the password — that lives in .env as DB_PASSWORD and is joined on at
+# startup (app/core/config.py: DatabaseConfig.url). The password is percent-encoded automatically,
+# so it can be written plainly even with @ : / % in it.
+# Setting DATABASE_URL in the environment overrides this whole block (docker-compose does that).
+database:
+  backend: "sqlite"                      # sqlite | postgres
+  path: "./app.db"                       # sqlite only — relative to the backend/ working dir
+  # --- used when backend: postgres ---
+  host: "localhost"
+  port: 5432
+  name: "ai-video-factory"
+  user: "postgres"
+
+gemini:
+  model: "gemini-2.5-flash"
+  location: "us-central1"
+  temperature: 0.3
+  max_output_tokens: 16000
+  batch_size: 3
+  script_temperature: 0.85    # higher than `temperature` above — script writing is creative, not deterministic
+  script_max_output_tokens: 32000
+  script_thinking_budget: 1024
+
+video:
+  max_results: 10
+  search_query_variants: 5
+  max_duration_seconds: 700
+
+filter:
+  max_output_tokens: 8000
+  thinking_budget: 1024
+
+search:
+  max_search_rounds: 5             # hard cap on top-up rounds (backstop)
+  stop_after_barren_rounds: 2      # stop early if N rounds in a row add no new relevant video (0 = off)
+
+pipeline:
+  analyze_concurrency: 4      # max videos analyzed by Gemini in parallel (avoids 429)
+  recursion_limit: 25         # LangGraph safety cap on node transitions
+  off_topic_gate: true        # drop clips Gemini flags OFF_TOPIC after watching (false = keep all)
+
+script:
+  enabled: true
+  storyboard: true
+  include_tools_scene: true        # true = separate วัตถุดิบ + อุปกรณ์ scenes; false = ingredients only
+  parts: 1
+  duration_per_part: "06:00-06:30"
+  target_duration: "06:00-06:30"
+  words_per_part: 0
+  words_per_second: 0
+  min_shots_per_part: 60
+  min_scenes_per_part: 17
+  # Fallback host, used until someone fills in the Character config panel (config_refs.name/description
+  # override these at startup). These two used to be hardcoded as the UI's form defaults; they moved
+  # here when the fields left Step 2, so a fresh install still describes a host instead of nobody.
+  character_name: "ครูพี่เกศ"
+  character_desc: "ผู้หญิง อายุ 35 ปี สอนทำอาหารไทย บุคลิกอบอุ่น เป็นกันเอง พูดจาชัดเจน"
+  theme: ""
+  mood: ""
+  material_palette: ""
+  lighting: ""
+
+# Image search (Tavily) — finds a reference image per scene.
+# API key from env TAVILY_API_KEY (sign up: https://app.tavily.com/).
+image_search:
+  enabled: false
+  provider: "tavily"
+  search_depth: "basic"
+  candidates: 3
+  timeout: 15
+  concurrency: 4
+  validation: true
+  max_validation_rounds: 5
+
+# Generate an image per storyboard shot from its prompt_img (gemini image model).
+image_gen:
+  enabled: true
+  provider: "openai"                       # which sub-config below: "gemini" (Vertex) | "openai" (gpt-image-*)
+  gemini:
+    model: "gemini-2.5-flash-image"
+    aspect_ratio: "16:9"                   # native, no letterbox — 1:1 | 16:9 | 9:16 | 4:3 | 3:4
+  openai:
+    model: "gpt-image-2"
+    size: "2048x1152"                      # 1024x1024 | 1536x1024 | 2048x1152 (16:9 landscape) | 1024x1536
+    quality: "low"                         # low | medium | high | auto (high≈5min/img, low≈fast)
+  concurrency: 3
+  character_ref: "docs/teacher.png"        # the person — only reference used for character in generation
+  scene_ref: "docs/kitchen.jpeg"           # the background — only reference used for the place in generation
+  on_screen_text_in_image: false           # true = render the shot's Thai on-screen text into the image
+  use_theme_in_prompt: false                # false = drop Theme from prompt_img; let scene_ref define the scene
+  subject_refs_in_image: true              # feed matched ingredient/tool reference photos into generation
+  max_subject_refs: 0                      # max subject reference photos per shot (base char+scene = +2)
+  ref_resize_px: 512                       # resize (longest edge) for scene_ref + subject reference photos
+  character_ref_resize_px: 768             # resize for character_ref (larger = more face/outfit detail)
+  dynamic_image: true                      # false = legacy one-fresh-image-per-shot path
+  use_prev_as_ref: true                    # reuse/adapt the previous shot's image within a scene
+  max_total_refs: 7                        # cap refs sent to the model (kitchen+person+prev+keywords)
+  output_qc:
+    enabled: false                         # QC เลิกใช้ (2026-08) — โค้ดยังอยู่ครบ เปิดคืนได้ที่นี่
+    max_regens: 0                          # 0 = ตรวจอย่างเดียว (ติดป้าย ⚠ + แนบ feedback ให้); >0 = auto-regen
+
+# Generate a video clip per storyboard shot from its prompt_video (Veo on Vertex).
+video_gen:
+  enabled: true
+  provider: "gemini_api"                   # "gemini_api" (GEMINI_API_KEY) | "vertex" (service account)
+  model: "veo-3.1-fast-generate-preview"
+  interpolation_model: "veo-3.1-generate-preview"  # Veo standard: last_frame interpolation + Omni chain fallback
+  resolution: "720p"                       # 720p | 1080p
+  duration_seconds: 6                      # seconds per clip
+  aspect_ratio: "16:9"                     # 16:9 | 9:16
+  generate_audio: false                    # true = Veo adds audio; false = silent (overlay VO later) — Vertex only
+  person_generation: "allow_adult"         # "allow_adult" | "dont_allow"
+  use_image_seed: true                     # use the shot's generated image as first frame (image-to-video)
+  output_gcs_uri: ""                       # optional gs:// bucket — set only if Veo/Vertex requires one
+  poll_interval_seconds: 8
+  cinematic_prompt: true                   # enforce Veo 5-element structure + camera/lens/lighting/audio vocab
+  color_grade: "warm 3200K key light, soft shadows, shallow depth of field, cinematic color"
+  negative_prompt: "subtitles, captions, on-screen text, watermark, logo, morphing objects, warping, deformed hands, extra fingers, duplicate person, floating objects, teleporting, jump cut, scene change, cartoon, drawing, low quality"
+  output_qc:
+    enabled: false                         # QC เลิกใช้ (2026-08) — โค้ดยังอยู่ครบ เปิดคืนได้ที่นี่
+    max_regens: 0
+  transitions_enabled: true                # false = every boundary is a hard cut (legacy)
+  default_join: "cut"                      # fallback when a shot has no join_with_prev tag
+  min_chain_shots: 2                       # extension-chain only a run of >= this many `continuous` shots
+  rai_retries: 5                           # retries when Veo drops a clip on the safety/audio filter
+  retry_backoff_seconds: 15
+  dissolve_seconds: 0.4
+  scene_fade_seconds: 0.5
+  bookend_fade_seconds: 0.5
+  audio_crossfade: true
+  reencode_fps: 24
+  jl_cut_seconds: 0.5
+  subtitles_in_video: false
+  subtitle_font: "assets/fonts/NotoSansThai-Regular.ttf"
+  subtitle_font_size: 56
+  subtitle_sync_to_speech: true
+  ffmpeg_bin: "ffmpeg"
+
+# Text-to-speech for voice-over (Gemini TTS via Vertex AI). Uses credentials.json service account — no GEMINI_API_KEY needed.
+tts:
+  provider: "gemini"
+  model: "gemini-2.5-flash-preview-tts"
+  voice: "Kore"                            # Gemini prebuilt voice (Kore/Aoede/Leda/Puck/Charon/...)
+  style: "อบอุ่น สดใส สบายๆ"
+  sample_rate: 24000
+  detect_timestamp: true
+
+# The narrator's voice for Omni's "Voice direction:" block. NOT `tts` above — that is the re-voice
+# path. These are the FALLBACK: the Character config panel (config_refs.voice) overrides whatever is
+# set here, and a request may override that again. Changing any of it only affects prompts written
+# afterwards — the block is frozen into prompt_video at Step 5.
+voice:
+  language: "Thai"
+  gender: "female"                         # female | male
+  vo_pace: 2.5                             # words per second
+  tone: "bright, cheerful, playful, energetic, and friendly"
+  style: "natural conversational delivery with expressive intonation and subtle vocal emphasis"
+
+# Langfuse tracing. Secrets (LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY) come from env/.env — if
+# missing while enabled=true, tracing simply turns off.
+langfuse:
+  enabled: true
+  host: "https://langfuse.kao9.dev"
+  environment: "development"
+  sample_rate: 1.0
+  debug: false
+  log_media: false
+
+# Public S3 base for ingredient/equipment reference photos ("" = feature off).
+s3_refs:
+  enabled: true
+  base_url: ""
+  extensions: ["jpg", "jpeg", "png", "webp"]
